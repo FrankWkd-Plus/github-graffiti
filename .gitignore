@@ -1,0 +1,7 @@
+# 本地仓库 / 测试目录
+repo/
+profile-repo/
+
+__pycache__/
+*.pyc
+.DS_Store
