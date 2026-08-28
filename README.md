@@ -50,7 +50,23 @@ python3 graffiti.py --word LOVE \
 | `--weeks-ago` | `1` | 单词最后一列距当前周往回几周 |
 | `--commits-per-pixel` | `4` | 每个像素的提交数，越多颜色越深 |
 | `--real-files` | - | 提交真实修改 `graffiti/<word>.html` 而非空提交 |
+| `--stealth` | - | 防封模式（见下） |
+| `--push-batch N` | `50` | 防封分批推送时每批的提交数 |
+| `--seed N` | - | 固定随机种子，可复现结果 |
 | `--preview` | - | 仅预览，不做任何提交 |
+
+## 防封模式 (--stealth)
+
+一次性推送几百个规律重复的提交容易被判定为机器人行为。加上 `--stealth` 后：
+
+- **提交时间随机化**：同一天的多个提交随机落在 9:00–23:00 之间（乱序、带随机秒数），而不是等间隔网格
+- **提交信息多样化**：从真实开发用语池随机抽取（`fix typo` / `wip` / `refactor xxx` …），不再千篇一律
+- **文件改动量随机**：real-files 模式下每次追加 1~5 行随机内容
+- **分批推送**：每批 `--push-batch`（默认 50）个提交，批间随机延时 3~8 秒，避免触发限流
+
+```bash
+python3 graffiti.py --word LOVE --real-files --stealth --commits-per-pixel 10 --push
+```
 
 ## 颜色深浅怎么调？
 
