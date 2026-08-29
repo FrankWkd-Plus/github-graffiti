@@ -21,6 +21,9 @@ Sat  │               ##### .###. ..#.. #####
 - ✅ `--preview` 纯本地预览，先看效果再决定提交
 - ✅ `--commits-per-pixel` 控制颜色深浅（活跃账号可调到 10+）
 - ✅ `--real-files` 提交真实 HTML 文件而非空提交，更"像真的"
+- ✅ `--stealth` 防封模式：时间戳/提交信息/改动量随机化 + 分批推送
+- ✅ `--erase` 擦除旧单词，干净换词不叠影
+- ✅ GitHub Actions 一键换词（擦旧词 + 画新词一次运行完成）
 - ✅ 自动检查提交邮箱是否绑定 GitHub 账号
 - ✅ 单文件 Python 脚本，零依赖
 
@@ -39,6 +42,27 @@ python3 graffiti.py --word LOVE \
     --push
 ```
 
+不想敲命令？直接用 [GitHub Actions 一键换词](#github-actions-一键换词)。
+
+## GitHub Actions 一键换词
+
+仓库自带 [.github/workflows/graffiti.yml](.github/workflows/graffiti.yml)，
+在 Actions 页面填个单词点 Run，自动完成「擦旧词 + 画新词 + 强推」：
+
+1. 创建 PAT：Settings → Developer settings → Personal access tokens
+   （Classic 勾选 `repo`，或 Fine-grained 给目标仓库 Contents 读写权限）
+2. 添加仓库 Secret：本仓库 Settings → Secrets and variables → Actions →
+   新建 `GRAFFITI_PAT`，值为上面的 token
+3. 本仓库 Actions → Graffiti → Run workflow，填写：
+   - `word`：新单词（留空 = 只擦除）
+   - `erase_word`：要擦除的旧单词（留空 = 不擦除）
+   - `commits_per_pixel` / `weeks_ago` / `target_repo`：可选
+
+> 为什么需要 PAT：Actions 默认 `GITHUB_TOKEN` 推的提交**不一定计入贡献图**
+> （github-actions bot 相关提交会被排除），用自己的 PAT 推送 + noreply 邮箱
+> 才能保证计入。workflow 会自动用 `<actor_id>+<actor>@users.noreply.github.com`
+> 作为提交邮箱。
+
 ## 参数
 
 | 参数 | 默认 | 说明 |
@@ -51,6 +75,7 @@ python3 graffiti.py --word LOVE \
 | `--commits-per-pixel` | `4` | 每个像素的提交数，越多颜色越深 |
 | `--real-files` | - | 提交真实修改 `graffiti/<word>.html` 而非空提交 |
 | `--stealth` | - | 防封模式（见下） |
+| `--erase` | - | 擦除模式：删除已有涂鸦提交并重写历史（见下） |
 | `--push-batch N` | `50` | 防封分批推送时每批的提交数 |
 | `--seed N` | - | 固定随机种子，可复现结果 |
 | `--preview` | - | 仅预览，不做任何提交 |
@@ -85,25 +110,6 @@ python3 graffiti.py --word FADE --repo ./profile-repo --real-files --stealth --p
 - 涂鸦提交全在尾部时直接 reset（快）；与正常提交交错时用 filter-branch 逐个剔除（正常提交保留）
 - ⚠️ force push 会重写远程历史，若有协作者请先沟通
 
-## GitHub Actions 一键换词
-
-仓库自带 [.github/workflows/graffiti.yml](.github/workflows/graffiti.yml)，
-在 Actions 页面填个单词点 Run，自动完成「擦旧词 + 画新词 + 强推」：
-
-1. 创建 PAT：Settings → Developer settings → Personal access tokens
-   （Classic 勾选 `repo`，或 Fine-grained 给目标仓库 Contents 读写权限）
-2. 添加仓库 Secret：本仓库 Settings → Secrets and variables → Actions →
-   新建 `GRAFFITI_PAT`，值为上面的 token
-3. 本仓库 Actions → Graffiti → Run workflow，填写：
-   - `word`：新单词（留空 = 只擦除）
-   - `erase_word`：要擦除的旧单词（留空 = 不擦除）
-   - `commits_per_pixel` / `weeks_ago` / `target_repo`：可选
-
-> 为什么需要 PAT：Actions 默认 `GITHUB_TOKEN` 推的提交**不一定计入贡献图**
-> （github-actions bot 相关提交会被排除），用自己的 PAT 推送 + noreply 邮箱
-> 才能保证计入。workflow 会自动用 `<actor_id>+<actor>@users.noreply.github.com`
-> 作为提交邮箱。
-
 ## 颜色深浅怎么调？
 
 GitHub 热力图按**当日提交总数**分档（Less → More 共 5 档）。你的账号平时活跃度越高，
@@ -117,7 +123,18 @@ GitHub 热力图按**当日提交总数**分档（Less → More 共 5 档）。�
 
 同一天的多个提交时间戳会自动铺满全天，互不重叠。
 
-## ⚠️ 注意事项
+## 原理
+
+GitHub 主页的贡献热力图是 **7 行（周日→周六）× 52 列（周）** 的网格，恰好是一块
+7 像素高的点阵屏。每个字母用 5×7 点阵渲染，占 5 列 + 1 列间隔；脚本用
+`GIT_AUTHOR_DATE` / `GIT_COMMITTER_DATE` 把每个 `--allow-empty`（或真实文件改动）
+的提交回溯到对应日期，推送后对应格子就亮了。
+
+贡献图的计算规则（也是 `--erase` 能生效的原因）：按**当前默认分支上实际存在的提交**
+统计，邮箱须绑定在你账号上。所以删掉涂鸦提交并 force push 后，GitHub 重算时旧格子
+会清空。
+
+## 注意事项
 
 1. **提交邮箱必须绑定在你的 GitHub 账号上**（Settings → Emails），否则热力图不计数。
    脚本结束时自动打印当前仓库的提交邮箱供检查。
