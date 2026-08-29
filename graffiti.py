@@ -147,6 +147,9 @@ def main():
     parser.add_argument("--stealth", action="store_true",
                         help="防封模式: 提交信息从真实开发用语池随机抽取, "
                              "时间戳随机化, 分批推送并带随机延时")
+    parser.add_argument("--erase", action="store_true",
+                        help="擦除模式: 删除已有涂鸦提交并重写历史 (需配合 --push 强推), "
+                             "GitHub 重算热力图后旧格子清空, 即可用新单词覆盖")
     parser.add_argument("--push-batch", type=int, default=50,
                         help="分批推送每批的提交数 (默认 50, 配合 --stealth)")
     parser.add_argument("--seed", type=int, help="随机种子 (复现实验结果用)")
@@ -217,6 +220,57 @@ def main():
         else:
             git(repo, "remote", "add", "origin", args.remote)
         print(f"远程已设置: {args.remote}")
+
+    # ---------------- 擦除模式 ----------------
+    if args.erase:
+        branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        target = f"graffiti/{args.word.strip().lower().replace(' ', '_') or 'graffiti'}.html"
+        before = int(git(repo, "rev-list", "--count", "HEAD").stdout.strip())
+
+        # 所有碰过目标文件的提交
+        glog = git(repo, "log", "--format=%H", "--", target).stdout.split()
+        if not glog:
+            print(f"没有找到与 {target} 相关的提交, 无需擦除。")
+            return
+        first = glog[-1]  # 最早的涂鸦提交
+
+        # 所有碰过 graffiti/ 的提交集合
+        graffiti_all = set(git(repo, "log", "--format=%H", "--", "graffiti").stdout.split())
+        # first 的父提交 (若涂鸦提交是根提交则无父提交)
+        rp = git(repo, "rev-parse", f"{first}^", check=False)
+        tail_commits = set(git(repo, "rev-list", "HEAD").stdout.split()) \
+            if rp.returncode != 0 else \
+            set(git(repo, "rev-list", f"{rp.stdout.strip()}..HEAD").stdout.split())
+
+        if rp.returncode == 0 and tail_commits <= graffiti_all:
+            # 情况1: 涂鸦提交全部位于分支尾部, 直接 reset 到涂鸦开始前
+            git(repo, "reset", "--hard", rp.stdout.strip())
+            print("涂鸦提交位于分支尾部, 已 reset。")
+        elif rp.returncode != 0 and tail_commits <= graffiti_all:
+            # 边界: 整个仓库只有涂鸦提交, 无法 reset 出干净历史
+            print("该仓库的所有提交都是涂鸦提交, 没有可保留的历史。")
+            print("建议: 直接删除远程仓库重建, 或手动处理。已中止, 未做任何修改。")
+            return
+        else:
+            # 情况2: 涂鸦与正常提交交错, 用 filter-branch 剔除
+            print("涂鸦提交与正常提交交错, 使用 filter-branch 重写历史...")
+            env_fb = dict(os.environ, FILTER_BRANCH_SQUELCH_WARNING="1")
+            git(repo, "filter-branch", "-f", "--prune-empty",
+                "--index-filter", f"git rm -rq --cached --ignore-unmatch {target}",
+                "--", branch, env=env_fb)
+
+        after = int(git(repo, "rev-list", "--count", "HEAD").stdout.strip())
+        print(f"\n擦除完成: {before} -> {after} 个提交 (移除 {before - after} 个涂鸦提交)")
+
+        if args.push:
+            print(f"force push {branch} ...")
+            git(repo, "push", "--force", "origin", branch, check=False)
+            print("已强推。")
+        else:
+            print(f"提示: 确认无误后手动强推  git -C {repo} push --force origin {branch}")
+        print("注意: GitHub 热力图重算需要几分钟到 24 小时, 旧格子才会变灰,")
+        print("      之后再生成新单词即可干净覆盖。")
+        return
 
     # ---------------- 生成提交 ----------------
     tz = time.strftime("%z") or "+0000"

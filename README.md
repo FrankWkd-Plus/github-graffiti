@@ -68,6 +68,23 @@ python3 graffiti.py --word LOVE \
 python3 graffiti.py --word LOVE --real-files --stealth --commits-per-pixel 10 --push
 ```
 
+## 覆盖旧单词 (--erase)
+
+热力图格子显示的是**当日提交总数**，旧涂鸦的提交一直在历史里，直接画新词只会两个词叠在一起。
+想干净地换词（比如用 `FADE` 覆盖 `LOVE`），必须先擦掉旧提交：
+
+```bash
+# 1. 擦除 LOVE (自动识别 graffiti/love.html 的提交, 重写历史)
+python3 graffiti.py --word LOVE --repo ./profile-repo --erase --push
+
+# 2. 等 GitHub 重算热力图 (几分钟~24小时), 旧格子变灰后, 再画新词
+python3 graffiti.py --word FADE --repo ./profile-repo --real-files --stealth --push
+```
+
+- 贡献图按**当前分支上实际存在的提交**计算，force push 移除后旧格子会清空
+- 涂鸦提交全在尾部时直接 reset（快）；与正常提交交错时用 filter-branch 逐个剔除（正常提交保留）
+- ⚠️ force push 会重写远程历史，若有协作者请先沟通
+
 ## 颜色深浅怎么调？
 
 GitHub 热力图按**当日提交总数**分档（Less → More 共 5 档）。你的账号平时活跃度越高，
