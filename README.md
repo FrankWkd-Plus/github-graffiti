@@ -85,6 +85,25 @@ python3 graffiti.py --word FADE --repo ./profile-repo --real-files --stealth --p
 - 涂鸦提交全在尾部时直接 reset（快）；与正常提交交错时用 filter-branch 逐个剔除（正常提交保留）
 - ⚠️ force push 会重写远程历史，若有协作者请先沟通
 
+## GitHub Actions 一键换词
+
+仓库自带 [.github/workflows/graffiti.yml](.github/workflows/graffiti.yml)，
+在 Actions 页面填个单词点 Run，自动完成「擦旧词 + 画新词 + 强推」：
+
+1. 创建 PAT：Settings → Developer settings → Personal access tokens
+   （Classic 勾选 `repo`，或 Fine-grained 给目标仓库 Contents 读写权限）
+2. 添加仓库 Secret：本仓库 Settings → Secrets and variables → Actions →
+   新建 `GRAFFITI_PAT`，值为上面的 token
+3. 本仓库 Actions → Graffiti → Run workflow，填写：
+   - `word`：新单词（留空 = 只擦除）
+   - `erase_word`：要擦除的旧单词（留空 = 不擦除）
+   - `commits_per_pixel` / `weeks_ago` / `target_repo`：可选
+
+> 为什么需要 PAT：Actions 默认 `GITHUB_TOKEN` 推的提交**不一定计入贡献图**
+> （github-actions bot 相关提交会被排除），用自己的 PAT 推送 + noreply 邮箱
+> 才能保证计入。workflow 会自动用 `<actor_id>+<actor>@users.noreply.github.com`
+> 作为提交邮箱。
+
 ## 颜色深浅怎么调？
 
 GitHub 热力图按**当日提交总数**分档（Less → More 共 5 档）。你的账号平时活跃度越高，

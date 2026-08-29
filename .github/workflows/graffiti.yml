@@ -1,0 +1,77 @@
+name: Graffiti
+
+# 用法: Actions → Graffiti → Run workflow, 填新单词 (和要擦除的旧单词)
+# 前提: 在仓库 Settings → Secrets → Actions 添加 GRAFFITI_PAT
+#       (Classic PAT 勾选 repo 权限, 或 Fine-grained PAT 给目标仓库 Contents 读写)
+on:
+  workflow_dispatch:
+    inputs:
+      word:
+        description: "要画的新单词 (留空 = 只擦除)"
+        required: false
+        default: ""
+      erase_word:
+        description: "要擦除的旧单词 (留空 = 不擦除)"
+        required: false
+        default: ""
+      commits_per_pixel:
+        description: "每个像素的提交数 (颜色深度)"
+        required: false
+        default: "4"
+      weeks_ago:
+        description: "单词结束位置往回几周"
+        required: false
+        default: "1"
+      target_repo:
+        description: "目标仓库 (owner/repo)"
+        required: false
+        default: "FrankWkd-Plus/FrankWkd-Plus"
+
+jobs:
+  graffiti:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout 脚本仓库
+        uses: actions/checkout@v4
+
+      - name: Checkout 目标仓库
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.target_repo }}
+          token: ${{ secrets.GRAFFITI_PAT }}
+          path: target
+          # 拿到完整历史, 擦除模式需要
+          fetch-depth: 0
+
+      - name: 配置提交身份与远程地址
+        run: |
+          # noreply 邮箱 = <用户ID>+<用户名>@users.noreply.github.com, 保证提交计入贡献图
+          git -C target config user.name "${{ github.actor }}"
+          git -C target config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+          git -C target remote set-url origin "https://x-access-token:${{ secrets.GRAFFITI_PAT }}@github.com/${{ inputs.target_repo }}.git"
+
+      - name: 擦除旧单词
+        if: ${{ inputs.erase_word != '' }}
+        run: python3 graffiti.py --word "${{ inputs.erase_word }}" --repo target --erase --push
+
+      - name: 画新单词
+        if: ${{ inputs.word != '' }}
+        run: >
+          python3 graffiti.py --word "${{ inputs.word }}" --repo target
+          --real-files --stealth
+          --commits-per-pixel "${{ inputs.commits_per_pixel }}"
+          --weeks-ago "${{ inputs.weeks_ago }}"
+          --push
+
+      - name: 结果摘要
+        if: always()
+        run: |
+          echo "目标仓库: ${{ inputs.target_repo }}"
+          if [ -n "${{ inputs.erase_word }}" ]; then
+            echo "已擦除: ${{ inputs.erase_word }} (热力图重算需几分钟~24小时)"
+          fi
+          if [ -n "${{ inputs.word }}" ]; then
+            echo "已绘制: ${{ inputs.word }}"
+          fi
