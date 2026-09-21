@@ -17,15 +17,16 @@ Sat  │               ##### .###. ..#.. #####
 
 ## 特性
 
-- ✅ 自定义单词（A–Z、0–9、空格、`! ? . - + * < >`，`@` 是爱心 ❤）
+- ✅ 自定义单词（26 字母 + 10 数字 + `! ? . , : ' - _ / = # + * < > ( ) [ ]` 等符号，`@` 是爱心 ❤）
 - ✅ `--preview` 纯本地预览，先看效果再决定提交
+- ✅ `--show-font` 打印内置字库
 - ✅ `--commits-per-pixel` 控制颜色深浅（活跃账号可调到 10+）
 - ✅ `--real-files` 提交真实 HTML 文件而非空提交，更"像真的"
 - ✅ `--stealth` 防封模式：时间戳/提交信息/改动量随机化 + 分批推送
-- ✅ `--erase` 擦除旧单词，干净换词不叠影
+- ✅ `--erase` 擦除旧单词，干净换词不叠影（只动涂鸦提交，正常提交原样保留）
 - ✅ GitHub Actions 一键换词（擦旧词 + 画新词一次运行完成）
 - ✅ 自动检查提交邮箱是否绑定 GitHub 账号
-- ✅ 单文件 Python 脚本，零依赖
+- ✅ 单文件 Python 脚本，零依赖；测试也只用标准库
 
 ## 快速开始
 
@@ -71,7 +72,7 @@ python3 graffiti.py --word LOVE \
 | `--repo` | `./repo` | 本地仓库路径，不存在则自动 init |
 | `--remote` | - | 远程仓库地址 |
 | `--push` | - | 生成后自动推送 |
-| `--weeks-ago` | `1` | 单词最后一列距当前周往回几周 |
+| `--weeks-ago` | `1` | 单词**最后一列**距当前周往回几周 |
 | `--commits-per-pixel` | `4` | 每个像素的提交数，越多颜色越深 |
 | `--real-files` | - | 提交真实修改 `graffiti/<word>.html` 而非空提交 |
 | `--stealth` | - | 防封模式（见下） |
@@ -79,6 +80,10 @@ python3 graffiti.py --word LOVE \
 | `--push-batch N` | `50` | 防封分批推送时每批的提交数 |
 | `--seed N` | - | 固定随机种子，可复现结果 |
 | `--preview` | - | 仅预览，不做任何提交 |
+| `--show-font` | - | 打印内置字库后退出（不用给 `--word`） |
+
+> `--weeks-ago` 数的是单词**最右边**那一列。宽度 5 的字母里只有中间一列
+> 有点（比如 `!`），它会落在 `weeks-ago + 2` 周前的位置。
 
 ## 防封模式 (--stealth)
 
@@ -99,16 +104,92 @@ python3 graffiti.py --word LOVE --real-files --stealth --commits-per-pixel 10 --
 想干净地换词（比如用 `FADE` 覆盖 `LOVE`），必须先擦掉旧提交：
 
 ```bash
-# 1. 擦除 LOVE (自动识别 graffiti/love.html 的提交, 重写历史)
+# 1. 擦除 LOVE (自动识别它的提交, 重写历史)
 python3 graffiti.py --word LOVE --repo ./profile-repo --erase --push
 
 # 2. 等 GitHub 重算热力图 (几分钟~24小时), 旧格子变灰后, 再画新词
 python3 graffiti.py --word FADE --repo ./profile-repo --real-files --stealth --push
 ```
 
-- 贡献图按**当前分支上实际存在的提交**计算，force push 移除后旧格子会清空
-- 涂鸦提交全在尾部时直接 reset（快）；与正常提交交错时用 filter-branch 逐个剔除（正常提交保留）
+擦除怎么认出"哪些提交是这个词的"——两条线索取并集：
+
+| 画法 | 留下的痕迹 |
+|---|---|
+| `--real-files` | 提交碰过 `graffiti/<word>.html` |
+| 空提交（默认） | 提交信息形如 `graffiti: <WORD> [...]` |
+
+⚠️ **`--stealth` + 空提交画的词认不出来**：那种提交信息是从开发用语池里随机抽的，
+文件名也不存在。想以后能擦掉，就用 `--real-files`（`--stealth` 可以和它同时用）。
+
+擦除只动属于这个单词的提交，其余提交原样保留：
+
+- 涂鸦提交整段在分支末尾 → 直接 `reset`，快，更早的历史一个字节都不动
+- 与正常提交交错 → `filter-branch` 逐个剔除，正常提交的**内容、作者、提交时间**都保留
+  （父提交变了所以 sha 会变，这是重写历史的固有代价）
 - ⚠️ force push 会重写远程历史，若有协作者请先沟通
+
+## 字符集与自定义字形
+
+内置 57 个字形（26 字母 + 10 数字 + 21 个符号，`@` 是爱心），用 `--show-font` 全部打印出来：
+
+```bash
+python3 graffiti.py --show-font
+```
+
+字形定义在 `graffiti.py` 顶部的 `FONT` 字典里，每个字符 7 行、每行 6 个字符：
+
+```python
+"L": [" #....", " #....", " #....", " #....", " #....", " #....", " #####"],
+#     ↑左边距  └────── 真正的 5 列, # 亮 / . 暗 ──────┘
+```
+
+想加自己的图案（logo、方块、箭头…），照着格式往 `FONT` 里加一条就行，
+字符之间的 1 列间隔是自动加的。`n` 个字符占 `6n-1` 列，超过 52 列会被一年窗口裁掉。
+
+## 常见问题
+
+**热力图没变化 / 格子不亮**
+
+1. 提交邮箱必须绑在你的 GitHub 账号上（Settings → Emails）。脚本结束时会打印当前仓库的提交邮箱，对着看一眼。
+2. 热力图是异步重算的，force push 之后要几分钟到 24 小时才更新。
+3. 账号平时很活跃时，涂鸦的提交数盖不过背景——把 `--commits-per-pixel` 调大。
+
+**`git commit` 报 "Please tell me who you are"**
+
+脚本会在动手前拦下来并告诉你怎么配：
+
+```bash
+git -C ./repo config user.name  "你的用户名"
+git -C ./repo config user.email "你的GitHub邮箱"
+```
+
+**Actions 里 push 报 `400 Duplicate header: Authorization`**
+
+`actions/checkout` 带 `token` 时默认会把 token 写进 `.git/config` 的 `extraheader`，
+和 workflow 自己配的那条叠成两个 `Authorization` 头。workflow 里已经用
+`persist-credentials: false` 关掉了，如果你改过那段，记得保留。
+
+**Actions 里 push 报 403 / 认证失败**
+
+PAT 权限不够。Classic PAT 勾 `repo`；Fine-grained PAT 给目标仓库
+**Contents: Read and write**。workflow 会先用 `git ls-remote` 验一次，失败会直接说清楚。
+
+**空提交算不算贡献？**
+
+算。GitHub 只要求"邮箱绑定在你账号上的提交存在于默认分支上"，不看改动量。
+`--allow-empty` 的提交照样计一格。
+
+## 开发
+
+测试只用标准库，不需要装任何东西：
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+45 个测试覆盖点阵渲染、列→周的日期映射、防封模式的随机化、`--erase` 的两条路径
+（reset / filter-branch），以及 workflow 里几个踩过的坑（token 泄露、重复认证头）。
+测试都在临时目录里建自己的 git 仓库，不会碰 `./repo` 和 `./profile-repo`。
 
 ## 颜色深浅怎么调？
 
@@ -142,9 +223,14 @@ GitHub 主页的贡献热力图是 **7 行（周日→周六）× 52 列（周�
 3. 推送到已有人协作的仓库请谨慎——232 个涂鸦提交会刷满协作者的 timeline。
 4. 单词太长（>8 字符）会超出一年窗口，可减小 `--weeks-ago` 或缩短单词。
 
-## 已知样式
+## 更多玩法
 
-- 用 `@` 当爱心：`--word "I@YOU"` ❤
+- 爱心：`--word "I@YOU"` ❤
+- 年份：`--word 2026`
+- 方块和符号：`--word "[#_#]"`、`--word "A=B"`、`--word "1+1"`
+- 一句短语（注意 8 字符上限）：`--word "HI YOU"`
+
+想玩点字库没有的，照「字符集与自定义字形」自己加图案即可。
 
 ## License
 

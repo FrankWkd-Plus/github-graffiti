@@ -5,3 +5,25 @@ profile-repo/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Claude Code 本地设置 (整个 .claude/ 不进仓库)
+.claude/
+
+# 编辑器 / IDE
+# 注意: 不带尾斜杠 —— 沙箱里这些路径是文件(设备节点)而不是目录,
+# 写成 ".idea/" 只匹配目录, 起不到忽略作用
+.idea
+.vscode
+
+# 环境注入的点文件。
+# 在部分沙箱/容器环境里, 这些路径会被挂成指向 /dev/null 的字符设备节点,
+# 于是 git 把它们当成未跟踪文件列出来。它们不是项目内容, 一律忽略。
+.bash_profile
+.bashrc
+.profile
+.zprofile
+.zshrc
+.ripgreprc
+.gitconfig
+.gitmodules
+.mcp.json
