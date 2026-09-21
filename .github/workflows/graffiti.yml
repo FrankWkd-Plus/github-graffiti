@@ -44,19 +44,40 @@ jobs:
           path: target
           # 拿到完整历史, 擦除模式需要
           fetch-depth: 0
+          # 关键: 不让 checkout 把 token 写进 target/.git/config。
+          # 否则 checkout 留下的 URL 作用域 extraheader 会和下面那条无作用域的
+          # extraheader 同时生效, git 会发出两个 Authorization 头, GitHub 直接
+          # 返回 400 Duplicate header: Authorization, push 全部失败。
+          # 关掉之后由下面这一步统一配置认证。
+          persist-credentials: false
 
       - name: 配置提交身份与认证
+        env:
+          PAT: ${{ secrets.GRAFFITI_PAT }}
+          ACTOR: ${{ github.actor }}
+          ACTOR_ID: ${{ github.actor_id }}
         run: |
+          set -euo pipefail
+          if [ -z "$PAT" ]; then
+            echo "::error::未配置 GRAFFITI_PAT。请在 本仓库 Settings → Secrets and variables → Actions 新建 secret, 名称 GRAFFITI_PAT, 值为一个有 ${{ inputs.target_repo }} Contents 读写权限的 PAT。"
+            exit 1
+          fi
+
           # noreply 邮箱 = <用户ID>+<用户名>@users.noreply.github.com, 保证提交计入贡献图
-          git -C target config user.name "${{ github.actor }}"
-          git -C target config user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+          git -C target config user.name "$ACTOR"
+          git -C target config user.email "${ACTOR_ID}+${ACTOR}@users.noreply.github.com"
+
           # 安全注意: token 不能拼进 remote URL —— push 失败时 git 报错会把整个 URL
           # (含 token) 打印出来, 泄露到公开的 Actions 日志。改用 http header 认证,
           # 并 add-mask 双保险 (即使 token 意外出现在日志中也会被打码)。
-          echo "::add-mask::${{ secrets.GRAFFITI_PAT }}"
-          echo "::add-mask::$(printf 'x-access-token:%s' '${{ secrets.GRAFFITI_PAT }}' | base64)"
-          git -C target config http.extraheader \
-            "AUTHORIZATION: basic $(printf 'x-access-token:%s' '${{ secrets.GRAFFITI_PAT }}' | base64)"
+          basic="$(printf 'x-access-token:%s' "$PAT" | base64 | tr -d '\n')"
+          echo "::add-mask::$PAT"
+          echo "::add-mask::$basic"
+          git -C target config http.extraheader "AUTHORIZATION: basic $basic"
+
+          # 确认认证确实生效 (只读请求, 不写任何东西)
+          git -C target ls-remote --exit-code origin HEAD >/dev/null \
+            || { echo "::error::PAT 认证失败, 请检查 token 是否有效、是否对 ${{ inputs.target_repo }} 有 Contents 读写权限。"; exit 1; }
 
       - name: 擦除旧单词
         if: ${{ inputs.erase_word != '' }}
