@@ -13,7 +13,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.8", "3.12"]
+        # 3.9 用来卡住 3.10+ 才有的语法 (match / X|Y), 3.12 是 ubuntu-latest 自带的。
+        # 没放 3.8: setup-python 在 ubuntu-24.04 上不一定还提供它。
+        python-version: ["3.9", "3.12"]
     steps:
       - uses: actions/checkout@v4
 
