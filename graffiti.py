@@ -77,11 +77,26 @@ FONT = {
     "*": [" .....", " #.#.#", " ..#..", " #####", " ..#..", " #.#.#", " ....."],
     "<": [" ...#.", " ..#..", " .#...", " #....", " .#...", " ..#..", " ...#."],
     ">": [" .#...", " ..#..", " ...#.", " ....#", " ...#.", " ..#..", " .#..."],
+    ",": [" .....", " .....", " .....", " .....", " ..#..", " ..#..", " .#..."],
+    ":": [" .....", " ..#..", " ..#..", " .....", " ..#..", " ..#..", " ....."],
+    "'": [" ..#..", " ..#..", " .....", " .....", " .....", " .....", " ....."],
+    "_": [" .....", " .....", " .....", " .....", " .....", " .....", " #####"],
+    "/": [" ....#", " ....#", " ...#.", " ..#..", " .#...", " #....", " #...."],
+    "=": [" .....", " .....", " #####", " .....", " #####", " .....", " ....."],
+    "#": [" .#.#.", " .#.#.", " #####", " .#.#.", " #####", " .#.#.", " .#.#."],
+    "(": [" ..#..", " .#...", " #....", " #....", " #....", " .#...", " ..#.."],
+    ")": [" ..#..", " ...#.", " ....#", " ....#", " ....#", " ...#.", " ..#.."],
+    "[": [" .###.", " .#...", " .#...", " .#...", " .#...", " .#...", " .###."],
+    "]": [" .###.", " ...#.", " ...#.", " ...#.", " ...#.", " ...#.", " .###."],
     # 爱心
     "@": [" .#.#.", " #####", " #####", " #####", " .###.", " ..#..", " ....."],
 }
 
 ROW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+# 非 stealth 模式的提交信息前缀。擦除模式靠它认出空提交画的词, 所以生成和
+# 匹配必须用同一个常量, 改一处就够。
+COMMIT_MSG_PREFIX = "graffiti: "
 
 # 真实开发风格的提交信息池 (防封: 避免所有 message 一个模板)
 COMMIT_MSG_POOL = [
@@ -114,11 +129,92 @@ def render_word(word):
     rows = ["", "", "", "", "", "", ""]
     for i, ch in enumerate(word):
         if ch not in FONT:
-            sys.exit(f"错误: 不支持的字符 '{ch}' (支持 A-Z 0-9 空格 !?.-+*<> 和 @ 代表爱心)")
+            sys.exit(f"错误: 不支持的字符 '{ch}' (支持 {' '.join(sorted(FONT))}); "
+                     f"用 --show-font 查看全部字形")
         glyph = FONT[ch]
         for r in range(7):
             rows[r] += glyph[r][1:] + (" " if i < len(word) - 1 else "")
     return rows
+
+
+def graffiti_filename(word):
+    """单词对应的涂鸦文件路径 (相对仓库根目录)"""
+    slug = word.strip().lower().replace(" ", "_")
+    return f"graffiti/{slug or 'graffiti'}.html"
+
+
+def collect_graffiti_commits(repo, word):
+    """找出所有属于这个单词的涂鸦提交 (返回 sha 集合)。
+
+    两条线索取并集, 因为两种画法留下的痕迹不同:
+      1. 碰过 graffiti/<word>.html 的提交 —— --real-files 画的词
+      2. 提交信息形如 "graffiti: <WORD> [...]" 的提交 —— 空提交画的词
+    """
+    found = set(git(repo, "log", "--format=%H", "--",
+                    graffiti_filename(word)).stdout.split())
+
+    # 用 Python 比对 subject 而不是 git --grep, 免得单词里的 . + * ? 被当成正则
+    prefix = f"{COMMIT_MSG_PREFIX}{word.strip()} [".upper()
+    for line in git(repo, "log", "--format=%H%x00%s").stdout.splitlines():
+        sha, sep, subject = line.partition("\x00")
+        if sep and subject.strip().upper().startswith(prefix):
+            found.add(sha)
+    return found
+
+
+def erase_commits(repo, word, drop, branch):
+    """把 drop 里的提交从历史里剔除, 其余提交原样保留 (作者/提交时间都不变)。
+
+    返回 (是否改动成功, 说明文字)。
+    """
+    order = git(repo, "rev-list", "HEAD").stdout.split()  # 新 -> 旧
+
+    # 从 HEAD 往回数, 有多少个提交正好是要擦的
+    n_leading = 0
+    while n_leading < len(order) and order[n_leading] in drop:
+        n_leading += 1
+
+    if n_leading == len(order):
+        return False, ("该分支的所有提交都是这次要擦除的涂鸦提交, 没有可保留的历史。\n"
+                       "建议: 删除远程仓库重建, 或手动处理。已中止, 未做任何修改。")
+
+    if n_leading == len(drop):
+        # 要擦的提交恰好是分支末尾连续一段 -> 直接 reset, 快, 且不动更早的历史
+        git(repo, "reset", "--hard", order[n_leading])
+        return True, (f"涂鸦提交位于分支末尾连续 {n_leading} 个, "
+                      f"已 reset 到 {order[n_leading][:8]}。")
+
+    # 与正常提交交错 -> filter-branch 重写历史。两个过滤器各有分工:
+    #   --commit-filter  按 GRAFFITI_DROP 把要擦的提交整个丢掉 (skip_commit)
+    #   --index-filter   把涂鸦文件从每一棵树里拿掉 —— skip_commit 只删提交、
+    #                    不动树, 光靠它的话文件会留在后续提交的树里
+    # 这里刻意不用 --prune-empty: 它和 --commit-filter 不兼容, 而且会连仓库里
+    # 本来就有的空提交一起删掉。保留提交一律用 git commit-tree, 不做删减。
+    print(f"涂鸦提交与正常提交交错, 用 filter-branch 剔除 {len(drop)} 个提交...")
+    env_fb = dict(os.environ,
+                  FILTER_BRANCH_SQUELCH_WARNING="1",
+                  GRAFFITI_DROP=" ".join(sorted(drop)))
+    git(repo, "filter-branch", "-f",
+        "--index-filter",
+        f"git rm -rq --cached --ignore-unmatch {graffiti_filename(word)}",
+        "--commit-filter",
+        'case " $GRAFFITI_DROP " in *" $GIT_COMMIT "*) skip_commit "$@";; '
+        '*) git commit-tree "$@";; esac',
+        "--", branch, env=env_fb)
+    return True, f"已用 filter-branch 剔除 {len(drop)} 个涂鸦提交。"
+
+
+def print_font():
+    """打印内置字库, 方便挑字符和照着改 FONT"""
+    chars = sorted(FONT)
+    print(f"\n内置字形 ({len(chars)} 个): {' '.join(chars)}")
+    print("(@ 是爱心; 空格也是合法字符)\n")
+    for r in range(7):
+        print("   " + "  ".join(FONT[c][r][1:] for c in chars))
+    print("   " + "  ".join(c.center(5) for c in chars))
+    print(f"\n每个字形 5 列宽, 字符之间自动留 1 列间隔, 所以 n 个字符占 6n-1 列。")
+    print("热力图一年只有 52 列, 建议不超过 8 个字符 (8 个字符 = 47 列)。")
+
 
 
 def git(repo, *args, env=None, check=True):
@@ -132,7 +228,7 @@ def git(repo, *args, env=None, check=True):
 
 def main():
     parser = argparse.ArgumentParser(description="在 GitHub 热力图上拼出自定义单词")
-    parser.add_argument("--word", required=True, help="要显示的单词 (A-Z 0-9 空格 等)")
+    parser.add_argument("--word", help="要显示的单词 (A-Z 0-9 空格 等; --show-font 查看字库)")
     parser.add_argument("--repo", default="./repo", help="本地仓库路径 (默认 ./repo, 不存在则自动 init)")
     parser.add_argument("--remote", help="远程仓库地址 (如 git@github.com:you/your-repo.git)")
     parser.add_argument("--push", action="store_true", help="生成后推送到远程")
@@ -153,7 +249,16 @@ def main():
     parser.add_argument("--push-batch", type=int, default=50,
                         help="分批推送每批的提交数 (默认 50, 配合 --stealth)")
     parser.add_argument("--seed", type=int, help="随机种子 (复现实验结果用)")
+    parser.add_argument("--show-font", action="store_true",
+                        help="打印内置字库后退出 (不用给 --word)")
     args = parser.parse_args()
+
+    if args.show_font:
+        print_font()
+        return
+
+    if not args.word:
+        parser.error("缺少 --word (或用 --show-font 查看字库)")
 
     rows = render_word(args.word)
     width = len(rows[0])
@@ -221,46 +326,48 @@ def main():
             git(repo, "remote", "add", "origin", args.remote)
         print(f"远程已设置: {args.remote}")
 
+    # 没配提交身份的话 git commit 会以一句难懂的报错退出, 这里提前说清楚
+    email = git(repo, "config", "user.email", check=False).stdout.strip()
+    if not email:
+        sys.exit(
+            f"错误: 仓库 {repo} 没有配置提交身份, git 无法提交。请先运行:\n\n"
+            f'  git -C {repo} config user.name  "你的用户名"\n'
+            f'  git -C {repo} config user.email "你的GitHub邮箱"\n\n'
+            f"或者用 noreply 邮箱 (Settings → Emails 里能看到, 形如 "
+            f"1234567+username@users.noreply.github.com)。\n"
+            f"提交邮箱必须绑定在你的 GitHub 账号上, 否则热力图不会计数。"
+        )
+
     # ---------------- 擦除模式 ----------------
     if args.erase:
+        # 先确认有 HEAD: 空仓库时 rev-parse --abbrev-ref HEAD 会直接 fatal
+        if git(repo, "rev-parse", "--verify", "HEAD", check=False).returncode != 0:
+            print("仓库还没有任何提交, 无需擦除。")
+            return
+
         branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
-        target = f"graffiti/{args.word.strip().lower().replace(' ', '_') or 'graffiti'}.html"
         before = int(git(repo, "rev-list", "--count", "HEAD").stdout.strip())
-
-        # 所有碰过目标文件的提交
-        glog = git(repo, "log", "--format=%H", "--", target).stdout.split()
-        if not glog:
-            print(f"没有找到与 {target} 相关的提交, 无需擦除。")
+        drop = collect_graffiti_commits(repo, args.word)
+        if not drop:
+            print(f"没有找到「{args.word}」的涂鸦提交, 无需擦除。")
+            print("提示: 只认两种痕迹 —— graffiti/<word>.html 这个文件, "
+                  f"或提交信息 \"{COMMIT_MSG_PREFIX}<WORD> [...]\"。")
+            print("      用 --stealth 画的空提交(没有 --real-files)两者都没有, 认不出来。")
             return
-        first = glog[-1]  # 最早的涂鸦提交
 
-        # 所有碰过 graffiti/ 的提交集合
-        graffiti_all = set(git(repo, "log", "--format=%H", "--", "graffiti").stdout.split())
-        # first 的父提交 (若涂鸦提交是根提交则无父提交)
-        rp = git(repo, "rev-parse", f"{first}^", check=False)
-        tail_commits = set(git(repo, "rev-list", "HEAD").stdout.split()) \
-            if rp.returncode != 0 else \
-            set(git(repo, "rev-list", f"{rp.stdout.strip()}..HEAD").stdout.split())
-
-        if rp.returncode == 0 and tail_commits <= graffiti_all:
-            # 情况1: 涂鸦提交全部位于分支尾部, 直接 reset 到涂鸦开始前
-            git(repo, "reset", "--hard", rp.stdout.strip())
-            print("涂鸦提交位于分支尾部, 已 reset。")
-        elif rp.returncode != 0 and tail_commits <= graffiti_all:
-            # 边界: 整个仓库只有涂鸦提交, 无法 reset 出干净历史
-            print("该仓库的所有提交都是涂鸦提交, 没有可保留的历史。")
-            print("建议: 直接删除远程仓库重建, 或手动处理。已中止, 未做任何修改。")
+        print(f"找到 {len(drop)} 个「{args.word}」的涂鸦提交。")
+        ok, msg = erase_commits(repo, args.word, drop, branch)
+        print(msg)
+        if not ok:
             return
-        else:
-            # 情况2: 涂鸦与正常提交交错, 用 filter-branch 剔除
-            print("涂鸦提交与正常提交交错, 使用 filter-branch 重写历史...")
-            env_fb = dict(os.environ, FILTER_BRANCH_SQUELCH_WARNING="1")
-            git(repo, "filter-branch", "-f", "--prune-empty",
-                "--index-filter", f"git rm -rq --cached --ignore-unmatch {target}",
-                "--", branch, env=env_fb)
 
         after = int(git(repo, "rev-list", "--count", "HEAD").stdout.strip())
         print(f"\n擦除完成: {before} -> {after} 个提交 (移除 {before - after} 个涂鸦提交)")
+
+        leftover = git(repo, "log", "--format=%H", "--",
+                       graffiti_filename(args.word)).stdout.split()
+        if leftover:
+            print(f"⚠ 仍有 {len(leftover)} 个提交带有 {graffiti_filename(args.word)}, 请检查。")
 
         if args.push:
             print(f"force push {branch} ...")
@@ -281,7 +388,7 @@ def main():
     if args.real_files:
         graff_dir = os.path.join(repo, "graffiti")
         os.makedirs(graff_dir, exist_ok=True)
-        graff_file = os.path.join(graff_dir, f"{args.word.strip().lower().replace(' ', '_') or 'graffiti'}.html")
+        graff_file = os.path.join(repo, *graffiti_filename(args.word).split("/"))
         if not os.path.exists(graff_file):
             with open(graff_file, "w", encoding="utf-8") as f:
                 f.write(f"<!-- graffiti {args.word} - generated by github-graffiti -->\n")
@@ -310,7 +417,7 @@ def main():
                 fname = os.path.basename(graff_file) if graff_file else "code"
                 msg = random.choice(COMMIT_MSG_POOL).format(file=fname)
             else:
-                msg = f"graffiti: {args.word} [{d.isoformat()} r{r}c{c} #{k+1}]"
+                msg = f"{COMMIT_MSG_PREFIX}{args.word} [{d.isoformat()} r{r}c{c} #{k+1}]"
             if graff_file:
                 with open(graff_file, "a", encoding="utf-8") as f:
                     # 防封: 每次追加的行数/内容随机, 避免整齐划一

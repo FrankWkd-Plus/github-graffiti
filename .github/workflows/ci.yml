@@ -1,0 +1,40 @@
+name: CI
+
+# 跑 graffiti.py 的测试。测试全是标准库 unittest, 不需要装依赖。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      # 测试要真的建 git 仓库并提交, 得先配好身份
+      - name: 配置 git 身份
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.com"
+          git config --global init.defaultBranch main
+          # filter-branch 在测试里会被调用
+          git config --global advice.detachedHead false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: 跑测试
+        run: python3 -m unittest discover -s tests -v
+
+      - name: 脚本自检 (预览 + 字库)
+        run: |
+          python3 graffiti.py --word LOVE --preview
+          python3 graffiti.py --show-font >/dev/null
+          python3 graffiti.py --word "I@YOU" --preview
